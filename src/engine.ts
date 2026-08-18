@@ -44,6 +44,35 @@ export const EVENT_COLS = [
 
 export type MerchantRow = Record<(typeof MERCHANT_COLS)[number], string>;
 
+export const FUNNEL_STEPS = [
+  "widget",
+  "widget_shown",
+  "widget_interacted",
+  "kyc",
+  "underwriting",
+  "confirmation",
+  "completed",
+] as const;
+
+export type FunnelStep = (typeof FUNNEL_STEPS)[number];
+
+export const FUNNEL_LABELS: Record<FunnelStep, string> = {
+  widget: "Inicio",
+  widget_shown: "Widget visible",
+  widget_interacted: "Interacción",
+  kyc: "KYC",
+  underwriting: "Underwriting",
+  confirmation: "Confirmación",
+  completed: "Completado",
+};
+
+export type FunnelStage = {
+  key: FunnelStep;
+  label: string;
+  reached: number;
+  rate: number;
+};
+
 export type MerchantMetrics = {
   merchantId: string;
   merchantName: string;
@@ -61,8 +90,10 @@ export type MerchantMetrics = {
   completionRate: number;
   widgetShowRate: number;
   interactionRate: number;
-  paymentRate: number;
-  approvalRate: number;
+  kycRate: number;
+  underwritingRate: number;
+  confirmationRate: number;
+  funnelSteps: FunnelStage[];
   severityScore: number;
   businessImpact: number;
   confidence: number;
@@ -97,26 +128,20 @@ type DiagnosisResult = {
 
 type DeviceAgg = {
   total: number;
-  shown: number;
-  interacted: number;
-  payment: number;
-  approved: number;
   completed: number;
   lostGmv: number;
   dropCounts: Record<string, number>;
+  stepCounts: Record<string, number>;
 };
 
 type SessionAgg = {
   total: number;
-  shown: number;
-  interacted: number;
-  payment: number;
-  approved: number;
   completed: number;
   totalGmv: number;
   lostGmv: number;
   stepSeveritySum: number;
   dropCounts: Record<string, number>;
+  stepCounts: Record<string, number>;
   byDevice: Record<string, DeviceAgg>;
 };
 
@@ -128,11 +153,7 @@ type EventAgg = {
 
 export type GlobalFunnel = {
   total: number;
-  shown: number;
-  interacted: number;
-  payment: number;
-  approved: number;
-  completed: number;
+  stepCounts: Record<string, number>;
 };
 
 export type DataStore = {
@@ -167,30 +188,50 @@ export function emptyStore(): DataStore {
     eventAggs: {},
     seenSessionIds: {},
     seenEventIds: {},
-    globalFunnel: { total: 0, shown: 0, interacted: 0, payment: 0, approved: 0, completed: 0 },
+    globalFunnel: { total: 0, stepCounts: {} },
     loadCount: 0,
   };
 }
 
 function emptyDeviceAgg(): DeviceAgg {
-  return { total: 0, shown: 0, interacted: 0, payment: 0, approved: 0, completed: 0, lostGmv: 0, dropCounts: {} };
+  return { total: 0, completed: 0, lostGmv: 0, dropCounts: {}, stepCounts: {} };
+}
+
+function normalizeStepCounts(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
 }
 
 function normalizeSessionAgg(raw: Partial<SessionAgg>): SessionAgg {
   const base: SessionAgg = {
-    total: 0, shown: 0, interacted: 0, payment: 0, approved: 0, completed: 0,
-    totalGmv: 0, lostGmv: 0, stepSeveritySum: 0, dropCounts: {}, byDevice: {},
+    total: 0, completed: 0, totalGmv: 0, lostGmv: 0, stepSeveritySum: 0,
+    dropCounts: {}, stepCounts: {}, byDevice: {},
   };
   if (!raw || typeof raw !== "object") return base;
   const byDevice: Record<string, DeviceAgg> = {};
   if (raw.byDevice && typeof raw.byDevice === "object") {
     for (const [k, v] of Object.entries(raw.byDevice)) {
       if (v && typeof v === "object") {
-        byDevice[k] = { ...emptyDeviceAgg(), ...v, dropCounts: { ...(v.dropCounts ?? {}) } };
+        byDevice[k] = {
+          ...emptyDeviceAgg(),
+          ...v,
+          dropCounts: { ...(v.dropCounts ?? {}) },
+          stepCounts: normalizeStepCounts(v.stepCounts),
+        };
       }
     }
   }
-  return { ...base, ...raw, dropCounts: raw.dropCounts ?? {}, byDevice };
+  return {
+    ...base,
+    ...raw,
+    dropCounts: raw.dropCounts ?? {},
+    stepCounts: normalizeStepCounts(raw.stepCounts),
+    byDevice,
+  };
 }
 
 export function normalizeStore(raw: unknown): DataStore {
@@ -210,11 +251,7 @@ export function normalizeStore(raw: unknown): DataStore {
       gf && typeof gf === "object"
         ? {
             total: typeof gf.total === "number" ? gf.total : 0,
-            shown: typeof gf.shown === "number" ? gf.shown : 0,
-            interacted: typeof gf.interacted === "number" ? gf.interacted : 0,
-            payment: typeof gf.payment === "number" ? gf.payment : 0,
-            approved: typeof gf.approved === "number" ? gf.approved : 0,
-            completed: typeof gf.completed === "number" ? gf.completed : 0,
+            stepCounts: normalizeStepCounts((gf as GlobalFunnel).stepCounts),
           }
         : base.globalFunnel,
     loadCount: typeof s.loadCount === "number" ? s.loadCount : 0,
@@ -321,15 +358,46 @@ const TIER_WEIGHT: Record<string, number> = { XL: 1, L: 0.75, M: 0.5, S: 0.25 };
 
 function funnelStepSeverity(step: string): number {
   const map: Record<string, number> = {
-    widget: 0.9,
+    widget: 0.95,
     widget_not_shown: 0.95,
     widget_shown: 0.7,
-    widget_interacted: 0.5,
-    payment_method_selected: 0.35,
-    approved: 0.15,
+    widget_interacted: 0.55,
+    kyc: 0.4,
+    payment_method_selected: 0.4,
+    underwriting: 0.28,
+    confirmation: 0.12,
+    approved: 0.12,
     completed: 0,
   };
   return map[step] ?? 0.6;
+}
+
+function normalizeFunnelStep(raw: string): string {
+  const s = (raw || "").trim().toLowerCase().replace(/\s+/g, "_");
+  if (s === "widget_not_shown") return "widget";
+  if (s === "payment_method_selected" || s === "payment") return "kyc";
+  if (s === "approved") return "confirmation";
+  return s || "widget";
+}
+
+export function reachedAtLeast(stepCounts: Record<string, number>, step: FunnelStep): number {
+  const idx = FUNNEL_STEPS.indexOf(step);
+  if (idx < 0) return 0;
+  let n = 0;
+  for (let i = idx; i < FUNNEL_STEPS.length; i++) n += stepCounts[FUNNEL_STEPS[i]] ?? 0;
+  return n;
+}
+
+export function funnelStagesFromCounts(stepCounts: Record<string, number>, total: number): FunnelStage[] {
+  return FUNNEL_STEPS.filter((step) => step !== "widget").map((step) => {
+    const reached = reachedAtLeast(stepCounts, step);
+    return {
+      key: step,
+      label: FUNNEL_LABELS[step],
+      reached,
+      rate: total > 0 ? reached / total : 0,
+    };
+  });
 }
 
 function normalizeDevice(raw: string): string {
@@ -341,19 +409,25 @@ function normalizeDevice(raw: string): string {
 }
 
 function deviceCompletion(d: DeviceAgg): number {
-  return d.total > 0 ? d.completed / d.total : 0;
+  return d.total > 0 ? reachedAtLeast(d.stepCounts, "completed") / d.total : 0;
 }
-function deviceInteractionRate(d: DeviceAgg): number {
-  return d.shown > 0 ? d.interacted / d.shown : 0;
+function stageRate(steps: FunnelStage[], key: FunnelStep): number {
+  return steps.find((s) => s.key === key)?.rate ?? 0;
 }
-function deviceWidgetShowRate(d: DeviceAgg): number {
-  return d.total > 0 ? d.shown / d.total : 0;
-}
-function devicePaymentRate(d: DeviceAgg): number {
-  return d.interacted > 0 ? d.payment / d.interacted : 0;
-}
-function deviceApprovalRate(d: DeviceAgg): number {
-  return d.payment > 0 ? d.approved / d.payment : 0;
+
+function largestDropStep(steps: FunnelStage[]): FunnelStep {
+  let prev = 1;
+  let best: FunnelStep = "widget_shown";
+  let bestDrop = -1;
+  for (const s of steps) {
+    const drop = prev - s.rate;
+    if (drop > bestDrop) {
+      bestDrop = drop;
+      best = s.key;
+    }
+    prev = s.rate;
+  }
+  return best;
 }
 
 function mergeSessionRows(raw: Record<string, string>[], store: DataStore): { errors: string[]; added: number; skipped: number } {
@@ -379,11 +453,13 @@ function mergeSessionRows(raw: Record<string, string>[], store: DataStore): { er
       if (errors.length < maxErrors) errors.push(`checkout_sessions fila ${rowNum}: amount_requested vacío o inválido`);
       continue;
     }
-    const ws = toBool(r.widget_shown);
-    const wi = toBool(r.widget_interacted);
-    const approved = toBool(r.approved);
     const completed = toBool(r.completed);
-    if (ws === null || wi === null || approved === null || completed === null) {
+    if (
+      toBool(r.widget_shown) === null ||
+      toBool(r.widget_interacted) === null ||
+      toBool(r.approved) === null ||
+      completed === null
+    ) {
       if (errors.length < maxErrors) errors.push(`checkout_sessions fila ${rowNum}: campos booleanos inválidos`);
       continue;
     }
@@ -392,8 +468,8 @@ function mergeSessionRows(raw: Record<string, string>[], store: DataStore): { er
     let agg = store.sessionAggs[mid];
     if (!agg) {
       agg = {
-        total: 0, shown: 0, interacted: 0, payment: 0, approved: 0, completed: 0,
-        totalGmv: 0, lostGmv: 0, stepSeveritySum: 0, dropCounts: {}, byDevice: {},
+        total: 0, completed: 0, totalGmv: 0, lostGmv: 0, stepSeveritySum: 0,
+        dropCounts: {}, stepCounts: {}, byDevice: {},
       };
       store.sessionAggs[mid] = agg;
     }
@@ -405,18 +481,20 @@ function mergeSessionRows(raw: Record<string, string>[], store: DataStore): { er
       agg.byDevice[deviceKey] = dev;
     }
 
+    const step = normalizeFunnelStep(r.funnel_step_reached);
+
     agg.total++;
     dev.total++;
-    if (ws) { agg.shown++; dev.shown++; }
-    if (wi) { agg.interacted++; dev.interacted++; }
-    if (String(r.payment_method_selected || "").trim() !== "") { agg.payment++; dev.payment++; }
-    if (approved) { agg.approved++; dev.approved++; }
-    if (completed) { agg.completed++; dev.completed++; }
+    agg.stepCounts[step] = (agg.stepCounts[step] ?? 0) + 1;
+    dev.stepCounts[step] = (dev.stepCounts[step] ?? 0) + 1;
+    if (completed || step === "completed") {
+      agg.completed++;
+      dev.completed++;
+    }
     agg.totalGmv += amount;
-    if (!completed) {
+    if (!(completed || step === "completed")) {
       agg.lostGmv += amount;
       dev.lostGmv += amount;
-      const step = (r.funnel_step_reached || "").toLowerCase().replace(/\s+/g, "_");
       agg.stepSeveritySum += funnelStepSeverity(step);
       const drop = (r.drop_off_reason || "none").toLowerCase();
       agg.dropCounts[drop] = (agg.dropCounts[drop] ?? 0) + 1;
@@ -424,11 +502,7 @@ function mergeSessionRows(raw: Record<string, string>[], store: DataStore): { er
     }
 
     store.globalFunnel.total++;
-    if (ws) store.globalFunnel.shown++;
-    if (wi) store.globalFunnel.interacted++;
-    if (String(r.payment_method_selected || "").trim() !== "") store.globalFunnel.payment++;
-    if (approved) store.globalFunnel.approved++;
-    if (completed) store.globalFunnel.completed++;
+    store.globalFunnel.stepCounts[step] = (store.globalFunnel.stepCounts[step] ?? 0) + 1;
 
     if (sid) store.seenSessionIds[sid] = true;
     added++;
@@ -485,9 +559,9 @@ function cloneSessionAggs(aggs: Record<string, SessionAgg>): Record<string, Sess
   for (const [k, v] of Object.entries(aggs)) {
     const byDevice: Record<string, DeviceAgg> = {};
     for (const [dk, dv] of Object.entries(v.byDevice ?? {})) {
-      byDevice[dk] = { ...dv, dropCounts: { ...dv.dropCounts } };
+      byDevice[dk] = { ...dv, dropCounts: { ...dv.dropCounts }, stepCounts: { ...dv.stepCounts } };
     }
-    out[k] = { ...v, dropCounts: { ...v.dropCounts }, byDevice };
+    out[k] = { ...v, dropCounts: { ...v.dropCounts }, stepCounts: { ...v.stepCounts }, byDevice };
   }
   return out;
 }
@@ -549,10 +623,6 @@ function diagnose(
   agg: SessionAgg,
   topDropOff: string,
   topError: string,
-  widgetShowRate: number,
-  interactionRate: number,
-  paymentRate: number,
-  approvalRate: number,
   integrationFailures: number,
   supportTickets: number,
 ): DiagnosisResult {
@@ -582,13 +652,18 @@ function diagnose(
     deviceNote = `${Math.round((desktop.total / agg.total) * 100)}% de sesiones en desktop.`;
   }
 
-  const dev = focusDevice === "mobile" ? mobile : focusDevice === "desktop" ? desktop : null;
-  const devTopDropOff = dev ? topDropOffFromCounts(dev.dropCounts) : topDropOff;
-  const devWidgetShow = dev ? deviceWidgetShowRate(dev) : widgetShowRate;
-  const devInteraction = dev ? deviceInteractionRate(dev) : interactionRate;
-  const devPayment = dev ? devicePaymentRate(dev) : paymentRate;
-  const devApproval = dev ? deviceApprovalRate(dev) : approvalRate;
-  const devCompletion = dev ? deviceCompletion(dev) : agg.completed / agg.total;
+  const merchantFunnel = funnelStagesFromCounts(agg.stepCounts, agg.total);
+  const src = focusDevice === "mobile" ? mobile : focusDevice === "desktop" ? desktop : agg;
+  const leakFunnel = funnelStagesFromCounts(src.stepCounts, src.total);
+  const leakStep = largestDropStep(leakFunnel);
+  const devTopDropOff = focusDevice === "all" ? topDropOff : topDropOffFromCounts(src.dropCounts);
+
+  const widgetShow = stageRate(merchantFunnel, "widget_shown");
+  const interaction = stageRate(merchantFunnel, "widget_interacted");
+  const kyc = stageRate(merchantFunnel, "kyc");
+  const underwriting = stageRate(merchantFunnel, "underwriting");
+  const confirmation = stageRate(merchantFunnel, "confirmation");
+  const completion = stageRate(merchantFunnel, "completed");
 
   const platSlug = m.platform.replace(/\s+/g, "_").toLowerCase();
   const integ = m.integration_type || "unknown";
@@ -600,37 +675,56 @@ function diagnose(
   let rootCause = "";
   let recommendedAction = "";
 
-  if (devTopDropOff.includes("widget_not_shown") || devWidgetShow < 0.5) {
+  const knownDrop =
+    devTopDropOff.includes("widget_not_shown") ||
+    devTopDropOff.includes("widget_no_interaction") ||
+    devTopDropOff.includes("payment_method_not_selected") ||
+    devTopDropOff.includes("kyc") ||
+    devTopDropOff.includes("declined") ||
+    devTopDropOff.includes("underwriting") ||
+    devTopDropOff.includes("confirmation");
+
+  if (devTopDropOff.includes("widget_not_shown") || (!knownDrop && leakStep === "widget_shown")) {
     issueCode = "widget_not_shown";
     issueLabel = "Widget no visible";
-    rootCause = `${prefix}En ${ctx}, ${Math.round((1 - devWidgetShow) * 100)}% de sesiones${focusDevice !== "all" ? ` en ${focusDevice}` : ""} no muestran el widget BNPL. Drop-off: ${devTopDropOff.replace(/_/g, " ")}.`;
+    rootCause = `${prefix}En ${ctx}, el widget es visible en ${fmtPct(widgetShow)} de las sesiones${focusDevice !== "all" ? ` (foco ${focusDevice})` : ""}. Drop-off: ${devTopDropOff.replace(/_/g, " ")}.`;
     recommendedAction =
       focusDevice === "mobile"
         ? `Revisar snippet en checkout mobile de ${m.platform} (${integ}): viewport, lazy-load, condiciones CSS que oculten el widget, y timeout de render JS. Comparar con desktop donde completion es ${fmtPct(desktopComp)}. Validar en Safari iOS y Chrome Android.`
         : focusDevice === "desktop"
           ? `Auditar render del widget en desktop ${m.platform} (${integ}): conflictos con otros scripts, ad-blockers, y reglas de monto mínimo. Mobile tiene ${fmtPct(mobileComp)} completion — usar como referencia.`
           : `Auditar condiciones de render del widget en ${m.platform} (${integ}): monto mínimo, región, device. Escalar a integraciones si es custom API.`;
-  } else if (devTopDropOff.includes("widget_no_interaction") || devInteraction < 0.3) {
+  } else if (devTopDropOff.includes("widget_no_interaction") || (!knownDrop && leakStep === "widget_interacted")) {
     issueCode = "widget_no_interaction";
     issueLabel = "Widget sin interacción";
-    rootCause = `${prefix}Widget visible en ${ctx} pero solo ${fmtPct(devInteraction)} de usuarios interactúan${focusDevice !== "all" ? ` en ${focusDevice}` : ""}.`;
+    rootCause = `${prefix}Widget visible en ${fmtPct(widgetShow)} de las sesiones en ${ctx}, pero solo ${fmtPct(interaction)} interactúan.`;
     recommendedAction =
       focusDevice === "mobile"
         ? `Optimizar widget mobile en ${m.platform}: tamaño touch-target, copy above-the-fold, contraste, y posición antes del botón de pago. A/B test en ${integ} checkout mobile.`
         : `A/B test de placement y copy en ${m.platform} (${integ}). Revisar competencia de métodos de pago en checkout${focusDevice !== "all" ? ` ${focusDevice}` : ""}.`;
-  } else if (devTopDropOff.includes("payment_method_not_selected") || devPayment < 0.4) {
+  } else if (devTopDropOff.includes("payment_method_not_selected") || (!knownDrop && leakStep === "kyc")) {
     issueCode = "payment_not_selected";
-    issueLabel = "Sin selección de pago";
-    rootCause = `${prefix}Usuarios interactúan en ${ctx} pero solo ${fmtPct(devPayment)} avanza a selección de pago${focusDevice !== "all" ? ` en ${focusDevice}` : ""}.`;
+    issueLabel = "Sin avance a KYC";
+    rootCause = `${prefix}En ${ctx}, ${fmtPct(interaction)} de las sesiones interactúan y solo ${fmtPct(kyc)} llegan a KYC.`;
     recommendedAction =
       focusDevice === "mobile"
         ? `Simplificar selector de plazos en mobile ${m.platform} (${integ}): pre-seleccionar plan recomendado, reducir taps, revisar teclado numérico y scroll en modal BNPL.`
         : `Simplificar selector de plazos en ${m.platform} (${integ}). Revisar errores JS en consola del checkout ${focusDevice !== "all" ? focusDevice : ""}.`;
-  } else if (devApproval < 0.5) {
-    issueCode = "low_approval";
-    issueLabel = "Baja aprobación";
-    rootCause = `${prefix}Tasa de aprobación ${fmtPct(devApproval)} post-selección en ${ctx}${focusDevice !== "all" ? ` (${focusDevice})` : ""}. Vertical: ${m.vertical}.`;
+  } else if (devTopDropOff.includes("kyc") || (!knownDrop && leakStep === "underwriting")) {
+    issueCode = "kyc_drop";
+    issueLabel = "Caída en KYC";
+    rootCause = `${prefix}En ${ctx}, ${fmtPct(kyc)} de las sesiones llegan a KYC y ${fmtPct(underwriting)} a underwriting.`;
+    recommendedAction = `Reducir fricción de KYC en ${m.platform} (${integ}): documentos, selfies, timeouts y reintentos${focusDevice === "mobile" ? " — priorizar flujo mobile" : ""}.`;
+  } else if (devTopDropOff.includes("declined") || devTopDropOff.includes("underwriting") || (!knownDrop && leakStep === "confirmation")) {
+    issueCode = "underwriting_drop";
+    issueLabel = "Caída en underwriting";
+    rootCause = `${prefix}En ${ctx}, ${fmtPct(underwriting)} de las sesiones llegan a underwriting y ${fmtPct(confirmation)} a confirmación. Vertical: ${m.vertical}.`;
     recommendedAction = `Analizar montos vs. límites de crédito en ${m.platform} (${integ}). Ajustar messaging de montos elegibles${focusDevice === "mobile" ? " — en mobile el ticket promedio puede diferir" : ""}. Revisar reglas de riesgo para ${m.vertical}.`;
+  } else if (devTopDropOff.includes("confirmation") || (!knownDrop && leakStep === "completed")) {
+    issueCode = "confirmation_drop";
+    issueLabel = "Caída en confirmación";
+    rootCause = `${prefix}En ${ctx}, ${fmtPct(confirmation)} de las sesiones llegan a confirmación y ${fmtPct(completion)} completan.`;
+    recommendedAction = `Revisar pantallas de confirmación y errores post-aprobación en ${m.platform} (${integ})${focusDevice !== "all" ? ` (${focusDevice})` : ""}.`;
   } else if (integrationFailures > 0 || topError) {
     issueCode = "integration_error";
     issueLabel = "Error de integración";
@@ -639,7 +733,7 @@ function diagnose(
   } else {
     issueCode = "completion_gap";
     issueLabel = "Brecha de completion";
-    rootCause = `${prefix}Completion ${fmtPct(devCompletion)} en ${ctx} con caída distribuida. Desktop ${fmtPct(desktopComp)} · Mobile ${fmtPct(mobileComp)}.`;
+    rootCause = `${prefix}Completion ${fmtPct(completion)} en ${ctx} con caída distribuida. Desktop ${fmtPct(desktopComp)} · Mobile ${fmtPct(mobileComp)}.`;
     recommendedAction = `Deep-dive en ${m.platform} (${integ}) por device y región (${m.region}). Priorizar ${focusDevice !== "all" ? focusDevice : "el device con peor completion"}. Monitoreo de funnel segmentado.`;
   }
 
@@ -670,13 +764,15 @@ export function buildProcessedDataFromStore(rawStore: unknown): ProcessedData | 
     const evts = eventAggs[merchantId] ?? { errorCounts: {}, supportTickets: 0, integrationFailures: 0 };
     const topDropOff = topDropOffFromCounts(agg.dropCounts);
     const topError = topErrorFromCounts(evts.errorCounts);
-    const incomplete = agg.total - agg.completed;
-    const widgetShowRate = agg.shown / agg.total;
-    const interactionRate = agg.shown ? agg.interacted / agg.shown : 0;
-    const paymentRate = agg.interacted ? agg.payment / agg.interacted : 0;
-    const approvalRate = agg.payment ? agg.approved / agg.payment : 0;
-    const completionRate = agg.completed / agg.total;
-    const avgStepSeverity = agg.stepSeveritySum / Math.max(1, incomplete);
+    const incomplete = Math.max(1, agg.total - reachedAtLeast(agg.stepCounts, "completed"));
+    const funnelSteps = funnelStagesFromCounts(agg.stepCounts, agg.total);
+    const widgetShowRate = agg.total ? reachedAtLeast(agg.stepCounts, "widget_shown") / agg.total : 0;
+    const interactionRate = agg.total ? reachedAtLeast(agg.stepCounts, "widget_interacted") / agg.total : 0;
+    const kycRate = agg.total ? reachedAtLeast(agg.stepCounts, "kyc") / agg.total : 0;
+    const underwritingRate = agg.total ? reachedAtLeast(agg.stepCounts, "underwriting") / agg.total : 0;
+    const confirmationRate = agg.total ? reachedAtLeast(agg.stepCounts, "confirmation") / agg.total : 0;
+    const completionRate = agg.total ? reachedAtLeast(agg.stepCounts, "completed") / agg.total : 0;
+    const avgStepSeverity = agg.stepSeveritySum / incomplete;
 
     const severityScore = Math.min(
       100,
@@ -691,8 +787,7 @@ export function buildProcessedDataFromStore(rawStore: unknown): ProcessedData | 
     const confidence = Math.min(100, Math.log10(agg.total + 1) * 25 + (m.status === "live" ? 15 : 0));
 
     const diagnosis = diagnose(
-      m, agg, topDropOff, topError, widgetShowRate, interactionRate, paymentRate, approvalRate,
-      evts.integrationFailures, evts.supportTickets,
+      m, agg, topDropOff, topError, evts.integrationFailures, evts.supportTickets,
     );
 
     drafts.push({
@@ -712,8 +807,10 @@ export function buildProcessedDataFromStore(rawStore: unknown): ProcessedData | 
       completionRate,
       widgetShowRate,
       interactionRate,
-      paymentRate,
-      approvalRate,
+      kycRate,
+      underwritingRate,
+      confirmationRate,
+      funnelSteps,
       severityScore,
       businessImpact,
       confidence,
@@ -787,7 +884,7 @@ function cloneStore(store: DataStore): DataStore {
     eventAggs: cloneEventAggs(store.eventAggs),
     seenSessionIds: { ...store.seenSessionIds },
     seenEventIds: { ...store.seenEventIds },
-    globalFunnel: { ...store.globalFunnel },
+    globalFunnel: { ...store.globalFunnel, stepCounts: { ...store.globalFunnel.stepCounts } },
     loadCount: store.loadCount,
   };
 }

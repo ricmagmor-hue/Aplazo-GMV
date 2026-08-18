@@ -10,12 +10,13 @@ import {
   MERCHANT_COLS,
   normalizeStore,
   SESSION_COLS,
+  funnelStagesFromCounts,
   type DataStore,
   type FileStatus,
   type MerchantMetrics,
 } from "./engine";
 
-const STORE_KEY = "aplazo-gmv-store-v1";
+const STORE_KEY = "aplazo-gmv-store-v2";
 
 function loadPersistedStore(): DataStore {
   try {
@@ -79,11 +80,10 @@ export default function App() {
   const globalFunnel = processed
     ? [
         { label: "Sesiones", value: 100 },
-        { label: "Widget visible", value: (processed.globalFunnel.shown / processed.globalFunnel.total) * 100 },
-        { label: "Interacción", value: (processed.globalFunnel.interacted / processed.globalFunnel.total) * 100 },
-        { label: "Método pago", value: (processed.globalFunnel.payment / processed.globalFunnel.total) * 100 },
-        { label: "Aprobado", value: (processed.globalFunnel.approved / processed.globalFunnel.total) * 100 },
-        { label: "Completado", value: (processed.globalFunnel.completed / processed.globalFunnel.total) * 100 },
+        ...funnelStagesFromCounts(processed.globalFunnel.stepCounts, processed.globalFunnel.total).map((s) => ({
+          label: s.label,
+          value: s.rate * 100,
+        })),
       ]
     : [];
 
@@ -116,7 +116,7 @@ export default function App() {
         <h1>GMV Funnel — Priorización de Merchants</h1>
         <p className="lead">
           Carga CSVs de merchants, sesiones de checkout y eventos de integración. La herramienta limpia
-          la data, calcula severidad de funnel y rankea merchants por impacto vs. acciones escalables.
+          la data, calcula el funnel con <code>funnel_step_reached</code> y rankea merchants por impacto vs. acciones escalables.
         </p>
       </header>
 
@@ -125,8 +125,8 @@ export default function App() {
         <div className="card-b stack gap-12">
           <p className="muted">
             {hasData
-              ? `Base activa: ${Object.keys(store.merchants).length} merchants · ${Object.keys(store.seenSessionIds).length.toLocaleString()} sesiones · ${Object.keys(store.seenEventIds).length.toLocaleString()} eventos. Los archivos nuevos se fusionan; duplicados por session_id / event_id se omiten.`
-              : "Sube merchants.csv, checkout_sessions.csv e integration_events.csv. Deben tener las mismas columnas. Campos vacíos en variables de cálculo bloquean el archivo afectado."}
+              ? `Base activa: ${Object.keys(store.merchants).length} merchants · ${Object.keys(store.seenSessionIds).length.toLocaleString()} sesiones · ${Object.keys(store.seenEventIds).length.toLocaleString()} eventos. Puedes subir 1, 2 o 3 archivos. Obligatorios para ver un merchant nuevo: catálogo + sesiones. Integración es opcional.`
+              : "No hace falta subir los 3 siempre. Para ver ranking y funnel: merchants.csv + checkout_sessions.csv. integration_events.csv es opcional (errores técnicos y tickets)."}
           </p>
           <div className="row gap-8">
             <button className="btn btn-primary" disabled={processing} onClick={() => inputRef.current?.click()}>
@@ -166,7 +166,8 @@ export default function App() {
             <p className="caption">checkout_sessions.csv: {SESSION_COLS.join(", ")}</p>
             <p className="caption">integration_events.csv: {EVENT_COLS.join(", ")}</p>
             <p className="caption">
-              Campos críticos: merchant_id, amount_requested, widget_shown, widget_interacted, approved, completed, device.
+              Campos críticos: merchant_id, amount_requested, funnel_step_reached, completed, device.
+              El funnel se calcula con funnel_step_reached (etapas acumulativas).
             </p>
           </div>
         </section>
@@ -309,16 +310,19 @@ export default function App() {
               <div className="card-h">Métricas de funnel</div>
               <div className="card-b stack gap-12">
                 <table>
-                  <thead><tr><th>Etapa</th><th className="num">Tasa</th></tr></thead>
+                  <thead><tr><th>Etapa (funnel_step_reached)</th><th className="num">Llegaron</th><th className="num">% sesiones</th></tr></thead>
                   <tbody>
-                    <tr><td>Widget visible</td><td className="num">{fmtPct(selected.widgetShowRate)}</td></tr>
-                    <tr><td>Interacción</td><td className="num">{fmtPct(selected.interactionRate)}</td></tr>
-                    <tr><td>Selección pago</td><td className="num">{fmtPct(selected.paymentRate)}</td></tr>
-                    <tr><td>Aprobación</td><td className="num">{fmtPct(selected.approvalRate)}</td></tr>
-                    <tr><td>Completado</td><td className="num">{fmtPct(selected.completionRate)}</td></tr>
+                    {selected.funnelSteps.map((s) => (
+                      <tr key={s.key}>
+                        <td>{s.label}</td>
+                        <td className="num">{s.reached.toLocaleString()}</td>
+                        <td className="num">{fmtPct(s.rate)}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
                 <p className="caption">
+                  Cada tasa es el % de sesiones que llegaron <strong>al menos</strong> a esa etapa. Las barras son acumulativas y no pueden superar 100%.
                   Drop-off principal: {selected.topDropOff.replace(/_/g, " ")}
                   {selected.topError ? ` · Error: ${selected.topError}` : ""}
                 </p>
@@ -348,15 +352,9 @@ export default function App() {
             <div className="card-b stack gap-8">
               <BarChart
                 warn
-                items={[
-                  { label: "Widget", value: selected.widgetShowRate * 100 },
-                  { label: "Interacción", value: selected.interactionRate * 100 },
-                  { label: "Pago", value: selected.paymentRate * 100 },
-                  { label: "Aprobación", value: selected.approvalRate * 100 },
-                  { label: "Completado", value: selected.completionRate * 100 },
-                ]}
+                items={selected.funnelSteps.map((s) => ({ label: s.label, value: s.rate * 100 }))}
               />
-              <p className="caption">Fuente: checkout_sessions.csv · {selected.merchantId} · {selected.sessions.toLocaleString()} sesiones</p>
+              <p className="caption">Fuente: checkout_sessions.funnel_step_reached · {selected.merchantId} · {selected.sessions.toLocaleString()} sesiones</p>
             </div>
           </section>
         </>

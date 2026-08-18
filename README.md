@@ -74,24 +74,44 @@ La carpeta `dist/` es el entregable web. Puedes copiarla a Netlify, Vercel, GitH
 ## Cómo cargar datos (primera vez)
 
 1. En la app, pulsa **Cargar archivos CSV**.
-2. Selecciona los tres archivos a la vez (o en tandas). El nombre debe contener:
+2. Selecciona los archivos. El nombre debe contener:
    - `merchant` → catálogo de merchants
    - `checkout` o `session` → sesiones de funnel
-   - `integration` o `event` → eventos de integración
+   - `integration` o `event` → eventos de integración (**opcional**)
 3. Espera a que termine (checkout_sessions puede tener ~150k filas; tarda unos segundos).
 4. Si un archivo se rechaza, corrige las columnas/filas indicadas y vuelve a cargarlo. Los archivos válidos de esa carga sí se conservan.
+
+**Qué es obligatorio**
+
+| Objetivo | Archivos |
+|---|---|
+| Ver ranking, funnel y recomendaciones | `merchants.csv` **y** `checkout_sessions.csv` |
+| Agregar merchants nuevos | Esos dos, con las filas nuevas (mismo esquema) |
+| Enriquecer diagnóstico técnico (errores, tickets) | `integration_events.csv` además |
+
+Un merchant **no aparece** en el ranking si solo está en el catálogo (falta sesiones) o si solo tiene sesiones (falta fila en merchants). La integración no bloquea: sin ese archivo, funnel y ranking igual se calculan; solo no habrá error_code ni tickets en el diagnóstico.
 
 Los datos se guardan en el **localStorage del navegador**. Al recargar la página, la base sigue ahí (en esa computadora y ese navegador).
 
 ## Cómo actualizar / agregar datos (sin borrar lo existente)
 
 1. Con la base ya activa, el botón cambia a **Agregar archivos CSV**.
-2. Sube solo los archivos nuevos o un dump incremental.
+2. Sube **solo lo que tengas nuevo**: merchants, sesiones, integración, o cualquier combinación.
 3. Comportamiento de merge:
    - **merchants**: se actualizan por `merchant_id` (no se duplican).
    - **sesiones**: si el `session_id` ya existe, se **omite**.
    - **eventos**: si el `event_id` ya existe, se **omite**.
 4. El funnel y el ranking se recalculan sobre el universo acumulado.
+
+Ejemplos:
+
+| Qué quieres hacer | Qué subir |
+|---|---|
+| Primera carga completa | Los 3 (ideal) |
+| Agregar merchants nuevos | `merchants.csv` + `checkout_sessions.csv` de esos merchants |
+| Solo más sesiones de merchants que ya existen | Solo `checkout_sessions.csv` |
+| Actualizar catálogo (KAM, status, tier) | Solo `merchants.csv` |
+| Sumar errores técnicos | Solo `integration_events.csv` |
 
 **Reiniciar base** borra merchants, sesiones y eventos de este navegador. Úsalo si quieres partir de cero.
 
@@ -139,20 +159,25 @@ Pulsa **Ver detalle** o usa el selector para cambiar de merchant. El diagnóstic
 ### Diagnóstico
 
 - **Desktop vs mobile completion**: si hay una brecha ≥ 8 puntos porcentuales (y suficientes sesiones), la acción se ancla al device peor.
-- **Causa raíz / acción**: específicas de plataforma + integración + device + etapa del funnel (widget no visible, sin interacción, pago, aprobación, error técnico).
+- **Causa raíz / acción**: específicas de plataforma + integración + device + etapa de `funnel_step_reached` (widget no visible, sin interacción, KYC, underwriting, confirmación, error técnico).
 - **Cohorte de escalabilidad**: solo merchants con la **misma** combinación (`Shopify + plugin + mobile + widget no visible`, por ejemplo). Un impacto alto en 1–2 merchants no puntúa como “escalable”.
 
 ### Métricas de funnel (por merchant)
 
-Tasas secuenciales:
+El funnel usa **`funnel_step_reached`**, no `payment_method_selected` ni tasas condicionales entre booleanos. Cada barra es el % de sesiones que llegaron **al menos** a esa etapa (acumulativo, nunca > 100%):
 
-1. Widget visible / sesiones  
-2. Interacción / widget visible  
-3. Selección de pago / interacción  
-4. Aprobación / selección de pago  
-5. Completado / sesiones  
+1. Widget visible  
+2. Interacción  
+3. KYC  
+4. Underwriting  
+5. Confirmación  
+6. Completado  
 
-**Lost GMV** = suma de `amount_requested` donde `completed = false`.  
+Orden de etapas: `widget` → `widget_shown` → `widget_interacted` → `kyc` → `underwriting` → `confirmation` → `completed`.
+
+La severidad, el diagnóstico y las recomendaciones usan **las mismas tasas acumulativas** que el gráfico (% de sesiones que llegaron al menos a esa etapa), no tasas condicionales (interacción ÷ widget visible). La acción se elige con `drop_off_reason` y la mayor caída entre etapas consecutivas del funnel.
+
+**Lost GMV** = suma de `amount_requested` donde la sesión no llegó a `completed`.  
 **GMV en riesgo** (arriba) = suma de lost GMV de todos los merchants.
 
 ---
