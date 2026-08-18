@@ -6,11 +6,11 @@ Herramienta local para analizar el funnel BNPL, rankear merchants y recomendar a
 
 Necesitas [Node.js](https://nodejs.org/) 18 o superior y un navegador moderno.
 
-1. **Clona el repo** (sustituye la URL por la de tu repositorio en GitHub):
+1. **Clona el repo**:
 
    ```bash
-   git clone https://github.com/TU-USUARIO/aplazo-gmv-funnel.git
-   cd aplazo-gmv-funnel
+   git clone https://github.com/ricmagmor-hue/Aplazo-GMV.git
+   cd Aplazo-GMV
    ```
 
    Si descargas el proyecto como **ZIP**, descomprímelo y abre una terminal **dentro de esa carpeta** (no uses la carpeta padre).
@@ -163,7 +163,7 @@ Esta app **no depende de Cursor**. Opciones:
 
 1. **Carpeta del proyecto** — comparte el repo o un zip (sin `node_modules`). El receptor corre `npm install` y `npm run dev`.
 2. **Build estático** — `npm run build` y entrega/publica `dist/` (Netlify, Vercel, S3, IIS). `base: "./"` permite abrirla desde subcarpetas.
-3. **GitHub / GitLab** — sube el código y pide a tu equipo que clone. No incluyas CSVs con datos sensibles.
+3. **GitHub** — [ricmagmor-hue/Aplazo-GMV](https://github.com/ricmagmor-hue/Aplazo-GMV). Tu equipo clona el repo y corre los pasos de arriba. No incluyas CSVs con datos sensibles en el repositorio.
 
 No hay login ni API. Quien tenga la URL o la carpeta puede usarla con sus propios CSV.
 
