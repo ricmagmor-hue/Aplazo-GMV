@@ -13,6 +13,7 @@ import {
   funnelStagesFromCounts,
   MIN_SESSIONS_RANKED,
   MIN_SESSIONS_STABLE,
+  CONFIDENCE_WEIGHT,
   type DataStore,
   type FileStatus,
   type MerchantMetrics,
@@ -192,7 +193,9 @@ export default function App() {
                 <span className="caption" style={{ minWidth: 140, textAlign: "right" }}>Alta concentración GMV</span>
               </div>
               <p className="caption" style={{ textAlign: "center" }}>
-                Peso ranking: {Math.round(gmvBalance * 100)}% GMV perdido · {Math.round((1 - gmvBalance) * 100)}% escalabilidad
+                Peso ranking: {Math.round(gmvBalance * (1 - CONFIDENCE_WEIGHT) * 100)}% GMV perdido ·{" "}
+                {Math.round((1 - gmvBalance) * (1 - CONFIDENCE_WEIGHT) * 100)}% escalabilidad ·{" "}
+                {Math.round(CONFIDENCE_WEIGHT * 100)}% confianza (sesiones + status live)
               </p>
             </div>
           </section>
@@ -254,6 +257,7 @@ export default function App() {
                     <th className="center">Foco</th>
                     <th className="num">Escalab.</th>
                     <th className="center">Cohorte</th>
+                    <th className="num">Conf.</th>
                     <th className="num">Score</th>
                     <th className="num">GMV perdido</th>
                     <th />
@@ -275,6 +279,7 @@ export default function App() {
                       <td className="center">{m.focusDevice}</td>
                       <td className="num">{m.scalability.toFixed(0)}</td>
                       <td className="center">{m.actionMerchantsCount}</td>
+                      <td className="num">{m.confidence.toFixed(0)}</td>
                       <td className="num score">{m.compositeScore.toFixed(1)}</td>
                       <td className="num">{fmtMoney(m.lostGmv)}</td>
                       <td>
@@ -290,7 +295,7 @@ export default function App() {
                 </tbody>
               </table>
               <p className="caption" style={{ marginTop: 8 }}>
-                Score = slider × GMV perdido normalizado + (1 − slider) × escalabilidad. Cohorte = merchants con la misma acción granular.
+                Score = 85% × (slider × GMV perdido norm + (1 − slider) × escalabilidad norm) + 15% × confianza norm.
                 Merchants con menos de {MIN_SESSIONS_RANKED} sesiones se excluyen. Entre {MIN_SESSIONS_RANKED}–{MIN_SESSIONS_STABLE - 1} sesiones se marcan como "datos bajos".
               </p>
             </div>
@@ -327,6 +332,8 @@ export default function App() {
               )}
               <div className="row gap-16">
                 <div className="stat"><div className="label">Sesiones</div><div className="value">{selected.sessions.toLocaleString()}</div></div>
+                <div className="stat ok"><div className="label">Confianza</div><div className="value">{selected.confidence.toFixed(0)}</div></div>
+                <div className="stat warn"><div className="label">Severidad</div><div className="value">{selected.severityScore.toFixed(0)}</div></div>
                 <div className="stat info"><div className="label">Completion</div><div className="value">{fmtPct(selected.completionRate)}</div></div>
                 <div className="stat"><div className="label">Desktop completion</div><div className="value">{fmtPct(selected.desktopCompletionRate)}</div></div>
                 <div className="stat warn"><div className="label">Mobile completion</div><div className="value">{fmtPct(selected.mobileCompletionRate)}</div></div>

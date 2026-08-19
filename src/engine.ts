@@ -75,6 +75,8 @@ export type FunnelStage = {
 
 export const MIN_SESSIONS_RANKED = 50;
 export const MIN_SESSIONS_STABLE = 150;
+/** Fixed share of composite score driven by session volume + live status. */
+export const CONFIDENCE_WEIGHT = 0.15;
 
 export type DataQuality = "stable" | "low_data" | "insufficient";
 
@@ -882,11 +884,14 @@ export function applyBalance(
   gmvBalance: number,
 ): MerchantMetrics[] {
   const maxLostGmv = Math.max(1, ...metrics.map((m) => m.lostGmv));
+  const sliderWeight = 1 - CONFIDENCE_WEIGHT;
   return metrics
     .map((m) => {
       const gmvNorm = m.lostGmv / maxLostGmv;
       const scaleNorm = m.scalability / 100;
-      const compositeScore = (gmvBalance * gmvNorm + (1 - gmvBalance) * scaleNorm) * 100;
+      const confNorm = m.confidence / 100;
+      const baseNorm = gmvBalance * gmvNorm + (1 - gmvBalance) * scaleNorm;
+      const compositeScore = (sliderWeight * baseNorm + CONFIDENCE_WEIGHT * confNorm) * 100;
       return { ...m, compositeScore };
     })
     .sort((a, b) => b.compositeScore - a.compositeScore);

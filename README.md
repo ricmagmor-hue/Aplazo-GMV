@@ -141,7 +141,21 @@ Todos los archivos del mismo tipo deben traer **esas columnas**. Nombres se norm
 
 - A la derecha: prioriza merchants con **más GMV perdido** (concentración).
 - A la izquierda: prioriza acciones que se **replican en más merchants similares** (escalabilidad).
-- Score de ranking = `slider × GMV perdido normalizado + (1 − slider) × escalabilidad`.
+- **15% fijo** del score viene de **confianza** (volumen de sesiones + bonus si el merchant está `live`).
+
+Fórmula del score (default slider 65% GMV / 35% escalabilidad):
+
+```
+base = slider × GMV_perdido_norm + (1 − slider) × escalabilidad_norm
+score = 85% × base + 15% × confianza_norm
+```
+
+Con slider en 65%, el reparto efectivo es: **~55% GMV · ~30% escalabilidad · 15% confianza**.
+
+**Confianza** = `min(100, log₁₀(sesiones + 1) × 25 + (live ? 15 : 0))`.  
+Merchants con pocas sesiones bajan en ranking aunque tengan mucho GMV perdido. Complementa el umbral de exclusión (< 50 sesiones) y la advertencia “datos bajos” (50–149).
+
+**Severidad** no entra al score de ranking; se usa para el stat de portafolio y refleja qué tan lejos cayó en el funnel (`funnel_step_reached`) y la tasa de completion. **Sí define la recomendación** vía `drop_off_reason` y la mayor caída entre etapas (widget → interacción → KYC → underwriting → confirmación → completado).
 
 ### Ranking
 
@@ -151,7 +165,8 @@ Todos los archivos del mismo tipo deben traer **esas columnas**. Nombres se norm
 | Foco | Device donde está el problema (`mobile`, `desktop` o `all`) |
 | Escalab. | 0–100. Sube si muchos merchants **parecidos** se benefician de la misma acción |
 | Cohorte | Cuántos merchants comparten exactamente esa acción |
-| Score | Prioridad combinada (slider) |
+| Conf. | Confianza 0–100 (sesiones + status live); pesa 15% del score |
+| Score | Prioridad combinada (GMV + escalabilidad + confianza) |
 | GMV perdido | Suma de `amount_requested` en sesiones **no completadas** |
 
 Pulsa **Ver detalle** o usa el selector para cambiar de merchant. El diagnóstico, las tasas y el gráfico se actualizan.
