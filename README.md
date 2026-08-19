@@ -201,8 +201,8 @@ Para evitar que merchants con poca data distorsionen el ranking, la app aplica a
 | Sesiones | Comportamiento |
 |---|---|
 | < 50 | **Excluido del ranking.** Con 50 sesiones, el margen de error en completion rate es ±11pp (95% confianza) — la posición sería aleatoria. Aparece en un aviso al cargar la data. |
-| 50–99 | **Incluido, marcado como "datos bajos".** El diagnóstico y el score son orientativos. |
-| 100+ | **Ranking estable.** Margen ≤ ±8pp. Se considera suficiente para priorizar. |
+| 50–149 | **Incluido, marcado como "datos bajos".** El diagnóstico y el score son orientativos. |
+| 150+ | **Ranking estable.** Margen ≤ ±7pp. Se considera suficiente para priorizar. |
 
 Estos valores se basan en el error estándar binomial de la tasa de completion real (~22% en el dataset actual): `±z × √(p(1−p)/n)`.  
 Cuando un merchant excluido acumule 50+ sesiones en cargas posteriores, entra automáticamente al ranking.

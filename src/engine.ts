@@ -74,7 +74,7 @@ export type FunnelStage = {
 };
 
 export const MIN_SESSIONS_RANKED = 50;
-export const MIN_SESSIONS_STABLE = 100;
+export const MIN_SESSIONS_STABLE = 150;
 
 export type DataQuality = "stable" | "low_data" | "insufficient";
 
