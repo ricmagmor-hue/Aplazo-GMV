@@ -11,6 +11,8 @@ import {
   normalizeStore,
   SESSION_COLS,
   funnelStagesFromCounts,
+  MIN_SESSIONS_RANKED,
+  MIN_SESSIONS_STABLE,
   type DataStore,
   type FileStatus,
   type MerchantMetrics,
@@ -226,6 +228,20 @@ export default function App() {
             </div>
           </section>
 
+          {processed.insufficientMerchants.length > 0 && (
+            <div className="callout warn">
+              <h3>Merchants excluidos del ranking — datos insuficientes</h3>
+              <p>
+                Los siguientes merchants tienen menos de {MIN_SESSIONS_RANKED} sesiones y fueron excluidos del ranking.
+                Con tan pocas sesiones, la tasa de completion tiene una variabilidad estadística de ±{Math.round(Math.sqrt(0.22 * 0.78 / MIN_SESSIONS_RANKED) * 100 * 1.96)}pp (95% confianza), lo que haría que su posición en el ranking sea aleatoria.
+                Cuando acumulen al menos {MIN_SESSIONS_RANKED} sesiones serán incluidos automáticamente al recargar la data.
+              </p>
+              <p className="caption" style={{ marginTop: 6 }}>
+                {processed.insufficientMerchants.map((m) => `${m.merchantName} (${m.merchantId}): ${m.sessions} sesiones`).join(" · ")}
+              </p>
+            </div>
+          )}
+
           <section className="card">
             <div className="card-h">Ranking de merchants — priorización</div>
             <div className="card-b">
@@ -247,7 +263,14 @@ export default function App() {
                   {top15.map((m, i) => (
                     <tr key={m.merchantId} className={m.merchantId === selected.merchantId ? "active" : ""}>
                       <td>{i + 1}</td>
-                      <td>{m.merchantName}</td>
+                      <td>
+                        {m.merchantName}
+                        {m.dataQuality === "low_data" && (
+                          <span className="pill pill-warn" style={{ marginLeft: 6, fontSize: "0.7rem" }} title={`Solo ${m.sessions} sesiones — ranking orientativo (±${Math.round(Math.sqrt(0.22 * 0.78 / m.sessions) * 100 * 1.96)}pp)`}>
+                            datos bajos
+                          </span>
+                        )}
+                      </td>
                       <td>{m.platform} ({m.integrationType})</td>
                       <td className="center">{m.focusDevice}</td>
                       <td className="num">{m.scalability.toFixed(0)}</td>
@@ -268,6 +291,7 @@ export default function App() {
               </table>
               <p className="caption" style={{ marginTop: 8 }}>
                 Score = slider × GMV perdido normalizado + (1 − slider) × escalabilidad. Cohorte = merchants con la misma acción granular.
+                Merchants con menos de {MIN_SESSIONS_RANKED} sesiones se excluyen. Entre {MIN_SESSIONS_RANKED}–{MIN_SESSIONS_STABLE - 1} sesiones se marcan como "datos bajos".
               </p>
             </div>
           </section>
@@ -294,6 +318,13 @@ export default function App() {
                 {selected.merchantId} · {selected.platform} · {selected.integrationType} · {selected.gmvTier} · {selected.status}
                 {selected.kamAssigned ? ` · KAM: ${selected.kamAssigned}` : ""}
               </p>
+              {selected.dataQuality === "low_data" && (
+                <div className="callout warn" style={{ padding: "10px 14px" }}>
+                  <strong>Datos bajos ({selected.sessions} sesiones).</strong> El diagnóstico y el score son orientativos.
+                  La tasa de completion tiene un margen de ±{Math.round(Math.sqrt(0.22 * 0.78 / selected.sessions) * 100 * 1.96)}pp (95% confianza).
+                  Este merchant subirá al ranking estable cuando acumule {MIN_SESSIONS_STABLE}+ sesiones.
+                </div>
+              )}
               <div className="row gap-16">
                 <div className="stat"><div className="label">Sesiones</div><div className="value">{selected.sessions.toLocaleString()}</div></div>
                 <div className="stat info"><div className="label">Completion</div><div className="value">{fmtPct(selected.completionRate)}</div></div>

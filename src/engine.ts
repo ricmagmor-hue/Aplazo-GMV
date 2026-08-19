@@ -73,6 +73,11 @@ export type FunnelStage = {
   rate: number;
 };
 
+export const MIN_SESSIONS_RANKED = 50;
+export const MIN_SESSIONS_STABLE = 100;
+
+export type DataQuality = "stable" | "low_data" | "insufficient";
+
 export type MerchantMetrics = {
   merchantId: string;
   merchantName: string;
@@ -84,6 +89,7 @@ export type MerchantMetrics = {
   status: string;
   kamAssigned: string;
   sessions: number;
+  dataQuality: DataQuality;
   totalGmv: number;
   lostGmv: number;
   completedGmv: number;
@@ -166,11 +172,18 @@ export type DataStore = {
   loadCount: number;
 };
 
+export type InsufficientMerchant = {
+  merchantId: string;
+  merchantName: string;
+  sessions: number;
+};
+
 export type ProcessedData = {
   merchants: MerchantRow[];
   metrics: Omit<MerchantMetrics, "compositeScore">[];
   globalFunnel: GlobalFunnel;
   totalLostGmv: number;
+  insufficientMerchants: InsufficientMerchant[];
 };
 
 export type FileStatus = {
@@ -756,10 +769,16 @@ export function buildProcessedDataFromStore(rawStore: unknown): ProcessedData | 
   const maxLostGmv = Math.max(1, ...Object.values(sessionAggs).map((a) => a.lostGmv));
   type MetricDraft = Omit<MerchantMetrics, "compositeScore" | "scalability" | "actionMerchantsCount" | "actionTotalLostGmv">;
   const drafts: MetricDraft[] = [];
+  const insufficientMerchants: { merchantId: string; merchantName: string; sessions: number }[] = [];
 
   for (const [merchantId, agg] of Object.entries(sessionAggs)) {
     const m = store.merchants[merchantId];
     if (!m) continue;
+
+    if (agg.total < MIN_SESSIONS_RANKED) {
+      insufficientMerchants.push({ merchantId, merchantName: m.merchant_name, sessions: agg.total });
+      continue;
+    }
 
     const evts = eventAggs[merchantId] ?? { errorCounts: {}, supportTickets: 0, integrationFailures: 0 };
     const topDropOff = topDropOffFromCounts(agg.dropCounts);
@@ -790,6 +809,9 @@ export function buildProcessedDataFromStore(rawStore: unknown): ProcessedData | 
       m, agg, topDropOff, topError, evts.integrationFailures, evts.supportTickets,
     );
 
+    const dataQuality: DataQuality =
+      agg.total >= MIN_SESSIONS_STABLE ? "stable" : "low_data";
+
     drafts.push({
       merchantId,
       merchantName: m.merchant_name,
@@ -801,6 +823,7 @@ export function buildProcessedDataFromStore(rawStore: unknown): ProcessedData | 
       status: m.status,
       kamAssigned: m.kam_assigned,
       sessions: agg.total,
+      dataQuality,
       totalGmv: agg.totalGmv,
       lostGmv: agg.lostGmv,
       completedGmv: agg.totalGmv - agg.lostGmv,
@@ -851,7 +874,7 @@ export function buildProcessedDataFromStore(rawStore: unknown): ProcessedData | 
   });
 
   const totalLostGmv = metrics.reduce((a, m) => a + m.lostGmv, 0);
-  return { merchants, metrics, globalFunnel: global, totalLostGmv };
+  return { merchants, metrics, globalFunnel: global, totalLostGmv, insufficientMerchants };
 }
 
 export function applyBalance(
